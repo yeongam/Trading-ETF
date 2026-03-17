@@ -6,6 +6,7 @@ from datetime import datetime
 
 from .broker.base import BaseBroker, OrderResult
 from .strategy.base import BaseStrategy, Signal, SignalType
+from .risk import RiskManager
 from .config import TradingConfig
 
 logger = logging.getLogger(__name__)
@@ -19,10 +20,12 @@ class TradingScheduler:
         broker: BaseBroker,
         strategy: BaseStrategy,
         config: TradingConfig,
+        risk_manager: RiskManager | None = None,
     ) -> None:
         self._broker = broker
         self._strategy = strategy
         self._config = config
+        self._risk = risk_manager
         self._running = False
         self._trade_log: list[dict] = []
 
@@ -33,6 +36,12 @@ class TradingScheduler:
     @property
     def trade_log(self) -> list[dict]:
         return list(self._trade_log)
+
+    @property
+    def risk_stats(self) -> dict:
+        if self._risk:
+            return self._risk.stats
+        return {}
 
     def _is_market_open(self) -> bool:
         """장 운영 시간 확인 (평일 09:00~15:30)."""
@@ -56,6 +65,15 @@ class TradingScheduler:
             result = await self._broker.buy(signal.code, signal.quantity, signal.price)
         else:
             result = await self._broker.sell(signal.code, signal.quantity, signal.price)
+
+        # 리스크 매니저에 포지션 등록/청산
+        if result.success and self._risk:
+            price_info = await self._broker.get_price(signal.code)
+            current_price = price_info.current_price if price_info else signal.price
+            if signal.type == SignalType.BUY:
+                self._risk.open_position(signal.code, current_price, signal.quantity)
+            elif signal.type == SignalType.SELL:
+                self._risk.close_position(signal.code, current_price)
 
         self._trade_log.append({
             "timestamp": datetime.now().isoformat(),

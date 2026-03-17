@@ -45,6 +45,7 @@ async def get_status():
         "dry_run": _config.trading.dry_run if _config else True,
         "watchlist": _config.trading.watchlist if _config else [],
         "check_interval": _config.trading.check_interval if _config else 0,
+        "risk_stats": _scheduler.risk_stats if _scheduler else {},
     }
 
 

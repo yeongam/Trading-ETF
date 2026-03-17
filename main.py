@@ -6,28 +6,18 @@
 """
 
 import argparse
-import asyncio
 import logging
 import uvicorn
 
 from src.config import AppConfig
 from src.broker.toss import TossBroker
-from src.strategy.base import BaseStrategy, Signal, SignalType
+from src.risk import RiskManager, RiskConfig
+from src.strategy.multi_confirm import MultiConfirmStrategy
 from src.scheduler import TradingScheduler
 from src.dashboard.app import app, set_scheduler, set_config
 from src.utils.logger import setup_logger
 
 logger = logging.getLogger(__name__)
-
-
-class PlaceholderStrategy(BaseStrategy):
-    """기본 전략 (아무 동작 안 함). 실제 전략 구현 전 테스트용."""
-
-    async def analyze(self, code, broker):
-        price = await broker.get_price(code)
-        if price:
-            logger.info("[%s] %s 현재가: %d원", self.name, price.name, price.current_price)
-        return Signal(type=SignalType.HOLD, code=code, reason="전략 미설정")
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,15 +39,27 @@ def main() -> None:
         config.dashboard.port = args.port
 
     broker = TossBroker(config.toss)
-    strategy = PlaceholderStrategy()
-    scheduler = TradingScheduler(broker, strategy, config.trading)
+    risk_config = RiskConfig(
+        max_risk_per_trade=2.0,   # 1회 최대 총자산 2% 리스크
+        stop_loss_pct=1.5,        # 손절: -1.5%
+        take_profit_pct=3.0,      # 익절: +3.0%
+        trailing_stop_pct=1.0,    # 트레일링 스탑: 최고가 대비 -1.0%
+        max_positions=5,          # 동시 최대 5종목
+        max_daily_loss_pct=5.0,   # 일일 최대 손실 -5%
+        cooldown_after_loss=3,    # 3연속 손실 시 쿨다운
+    )
+    risk_manager = RiskManager(risk_config)
+    strategy = MultiConfirmStrategy(risk_manager)
+    scheduler = TradingScheduler(broker, strategy, config.trading, risk_manager)
 
     set_scheduler(scheduler)
     set_config(config)
 
     logger.info("대시보드 시작: http://%s:%d", config.dashboard.host, config.dashboard.port)
-    logger.info("브라우저에서 대시보드를 열고 '시작' 버튼을 눌러 매매를 시작하세요.")
-    logger.info("토스증권 로그인은 대시보드에서 '시작' 시 자동으로 진행됩니다.")
+    logger.info("전략: 다중확인 (RSI+MACD+BB+MA+스토캐스틱+거래량)")
+    logger.info("리스크: 손절 %.1f%% / 익절 %.1f%% / 트레일링 %.1f%%",
+                risk_config.stop_loss_pct, risk_config.take_profit_pct,
+                risk_config.trailing_stop_pct)
 
     uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
 

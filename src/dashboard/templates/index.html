@@ -69,6 +69,28 @@
         </div>
 
         <div class="card">
+            <h2>리스크 관리</h2>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+                <div>
+                    <div style="color:#8b949e;font-size:12px">보유 종목</div>
+                    <div id="risk-positions" style="font-size:20px;font-weight:600">0</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e;font-size:12px">일일 손익</div>
+                    <div id="risk-pnl" style="font-size:20px;font-weight:600">0%</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e;font-size:12px">총 거래</div>
+                    <div id="risk-trades" style="font-size:20px;font-weight:600">0</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e;font-size:12px">승률</div>
+                    <div id="risk-winrate" style="font-size:20px;font-weight:600">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>매매 이력</h2>
             <div id="trade-log">
                 <table>
@@ -97,6 +119,15 @@
                 document.getElementById('watchlist').value = (data.watchlist || []).join(',');
                 document.getElementById('interval').value = data.check_interval || 10;
                 document.getElementById('dry-run').checked = data.dry_run;
+                // 리스크 통계
+                const rs = data.risk_stats || {};
+                document.getElementById('risk-positions').textContent = rs.active_positions || 0;
+                const pnl = rs.daily_pnl || 0;
+                const pnlEl = document.getElementById('risk-pnl');
+                pnlEl.textContent = pnl.toFixed(1) + '%';
+                pnlEl.style.color = pnl >= 0 ? '#3fb950' : '#f85149';
+                document.getElementById('risk-trades').textContent = rs.total_trades || 0;
+                document.getElementById('risk-winrate').textContent = rs.total_trades > 0 ? rs.win_rate.toFixed(1) + '%' : '-';
             } catch (e) { console.error(e); }
         }
 
