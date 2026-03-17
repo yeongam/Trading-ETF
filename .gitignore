@@ -1,32 +1,20 @@
-# Prerequisites
-*.d
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# App
+config.json
+trading.log
 
-# Precompiled Headers
-*.gch
-*.pch
+# IDE
+.vscode/
+.idea/
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
+# OS
+.DS_Store
+Thumbs.db
