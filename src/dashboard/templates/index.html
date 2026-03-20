@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>토스증권 자동매매</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 22px; margin-bottom: 20px; color: #58a6ff; display: flex; align-items: center; gap: 10px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+        .card h2 { font-size: 13px; color: #8b949e; margin-bottom: 14px; text-transform: uppercase; letter-spacing: 0.05em; }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+        .status-running { background: #1a4731; color: #3fb950; }
+        .status-stopped { background: #4a1e1e; color: #f85149; }
+        .status-dry { background: #3d2e00; color: #d29922; }
+        .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-right: 8px; transition: opacity 0.15s; }
+        .btn-primary { background: #238636; color: #fff; }
+        .btn-danger { background: #da3633; color: #fff; }
+        .btn-secondary { background: #30363d; color: #e6edf3; }
+        .btn:hover { opacity: 0.8; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .stat-label { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+        .stat-value { font-size: 22px; font-weight: 700; }
+        .stat-sub { font-size: 12px; color: #8b949e; margin-top: 2px; }
+        .positive { color: #3fb950; }
+        .negative { color: #f85149; }
+        .neutral { color: #8b949e; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { padding: 8px 12px; text-align: left; color: #8b949e; font-weight: 500; border-bottom: 1px solid #21262d; font-size: 12px; }
+        td { padding: 10px 12px; border-bottom: 1px solid #161b22; }
+        tr:hover td { background: #1c2128; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+        .badge-buy-holding { background: #1a4731; color: #3fb950; }
+        .badge-buy-closed  { background: #21262d; color: #8b949e; }
+        .badge-sell-profit { background: #0d2e4a; color: #58a6ff; }
+        .badge-sell-loss   { background: #4a1e1e; color: #f85149; }
+        #trade-log { max-height: 360px; overflow-y: auto; }
+        .settings-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .settings-row label { width: 110px; color: #8b949e; font-size: 13px; }
+        .settings-row input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+        .settings-row input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+        .progress-bar { background: #21262d; border-radius: 4px; height: 6px; margin-top: 6px; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 4px; background: #58a6ff; transition: width 0.3s; }
+        .top-row { display: flex; gap: 16px; margin-bottom: 16px; }
+        .top-row .card { flex: 1; margin-bottom: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📈 토스증권 자동매매</h1>
+
+        <!-- 상태 + 컨트롤 -->
+        <div class="top-row">
+            <div class="card" style="flex:0 0 auto; min-width:200px">
+                <h2>상태</h2>
+                <div style="margin-bottom:14px; display:flex; gap:8px; flex-wrap:wrap;">
+                    <span id="status-badge" class="status-badge status-stopped">중지됨</span>
+                    <span id="dry-badge" class="status-badge status-dry" style="display:none">모의매매</span>
+                </div>
+                <div>
+                    <button class="btn btn-primary" onclick="startBot()">▶ 시작</button>
+                    <button class="btn btn-danger" onclick="stopBot()">■ 중지</button>
+                </div>
+                <div style="margin-top:10px;">
+                    <button class="btn btn-secondary" onclick="runOnce()" style="font-size:12px;padding:6px 14px">1회 실행</button>
+                </div>
+            </div>
+
+            <!-- 수익 현황 -->
+            <div class="card">
+                <h2>수익 현황</h2>
+                <div class="grid-3">
+                    <div>
+                        <div class="stat-label">총 실현 손익</div>
+                        <div id="total-pnl" class="stat-value neutral">₩0</div>
+                        <div class="stat-sub">청산 완료 기준</div>
+                    </div>
+                    <div>
+                        <div class="stat-label">예산 사용</div>
+                        <div id="budget-used" class="stat-value">₩0</div>
+                        <div class="progress-bar"><div id="budget-bar" class="progress-fill" style="width:0%"></div></div>
+                        <div id="budget-sub" class="stat-sub">/ ₩100,000</div>
+                    </div>
+                    <div>
+                        <div class="stat-label">승률</div>
+                        <div id="win-rate" class="stat-value neutral">-</div>
+                        <div id="win-sub" class="stat-sub">0승 / 0패</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 리스크 통계 -->
+        <div class="card">
+            <h2>리스크 현황</h2>
+            <div class="grid-4">
+                <div>
+                    <div class="stat-label">보유 종목</div>
+                    <div id="risk-positions" class="stat-value">0</div>
+                </div>
+                <div>
+                    <div class="stat-label">일일 손익</div>
+                    <div id="risk-pnl" class="stat-value neutral">0%</div>
+                </div>
+                <div>
+                    <div class="stat-label">총 거래 횟수</div>
+                    <div id="risk-trades" class="stat-value">0</div>
+                </div>
+                <div>
+                    <div class="stat-label">쿨다운</div>
+                    <div id="risk-cooldown" class="stat-value">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 설정 -->
+        <div class="card">
+            <h2>설정</h2>
+            <div class="settings-row">
+                <label for="watchlist">감시 종목</label>
+                <input type="text" id="watchlist" placeholder="비워두면 자동 스크리닝" style="width:280px">
+                <span style="font-size:12px;color:#8b949e">비워두면 자동 발굴</span>
+            </div>
+            <div class="settings-row">
+                <label for="interval">확인 주기(초)</label>
+                <input type="number" id="interval" value="60" min="10" style="width:80px">
+            </div>
+            <div class="settings-row">
+                <label for="total-budget">운용 금액(원)</label>
+                <input type="number" id="total-budget" value="100000" min="10000" step="10000" style="width:140px">
+            </div>
+            <div class="settings-row">
+                <label for="dry-run">모의매매</label>
+                <input type="checkbox" id="dry-run" checked>
+                <span style="font-size:12px;color:#8b949e">체크 해제 시 실제 매매</span>
+            </div>
+            <button class="btn btn-secondary" onclick="saveConfig()" style="margin-top:8px">설정 저장</button>
+        </div>
+
+        <!-- 매매 이력 -->
+        <div class="card">
+            <h2>매매 이력 <span id="trade-count" style="font-weight:400;font-size:12px;color:#8b949e"></span></h2>
+            <div id="trade-log">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>시각</th>
+                            <th>종목</th>
+                            <th>구분</th>
+                            <th>수량</th>
+                            <th>실현손익</th>
+                            <th>사유</th>
+                            <th>결과</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trade-body">
+                        <tr><td colspan="7" style="text-align:center;color:#8b949e;padding:20px">매매 이력 없음</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPositionCodes = [];
+
+        function fmt(n) {
+            return (n >= 0 ? '+' : '') + n.toLocaleString() + '원';
+        }
+        function fmtWon(n) {
+            return '₩' + Math.abs(n).toLocaleString();
+        }
+        function tradeTypeBadge(t) {
+            const type = (t.type || '').toLowerCase();
+            if (type === 'buy') {
+                return currentPositionCodes.includes(t.code)
+                    ? ['badge-buy-holding', '매수 보유중']
+                    : ['badge-buy-closed',  '매수'];
+            }
+            if (type === 'sell') {
+                return (t.pnl_amount || 0) >= 0
+                    ? ['badge-sell-profit', '매도 익절']
+                    : ['badge-sell-loss',   '매도 손절'];
+            }
+            return ['badge-buy-closed', '관망'];
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+
+                // 상태 배지
+                const badge = document.getElementById('status-badge');
+                const dryBadge = document.getElementById('dry-badge');
+                badge.textContent = data.running ? '실행 중' : '중지됨';
+                badge.className = 'status-badge ' + (data.running ? 'status-running' : 'status-stopped');
+                dryBadge.style.display = data.dry_run ? 'inline-block' : 'none';
+
+                // 설정
+                document.getElementById('watchlist').value = (data.watchlist || []).join(',');
+                document.getElementById('interval').value = data.check_interval || 60;
+                document.getElementById('total-budget').value = data.total_budget || 100000;
+                document.getElementById('dry-run').checked = data.dry_run;
+
+                // 수익 현황
+                const pnl = data.total_pnl_amount || 0;
+                const budget = data.total_budget || 100000;
+                const rs = data.risk_stats || {};
+                currentPositionCodes = rs.position_codes || [];
+
+                const totalPnlEl = document.getElementById('total-pnl');
+                totalPnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toLocaleString() + '원';
+                totalPnlEl.className = 'stat-value ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral');
+
+                const invested = rs.total_invested || 0;
+                document.getElementById('budget-used').textContent = fmtWon(invested);
+                document.getElementById('budget-sub').textContent = '/ ' + fmtWon(budget);
+                const pct = Math.min(100, Math.round(invested / budget * 100));
+                document.getElementById('budget-bar').style.width = pct + '%';
+                document.getElementById('budget-bar').style.background = pct >= 90 ? '#f85149' : '#58a6ff';
+
+                const winRate = rs.win_rate || 0;
+                const wins = rs.wins || 0;
+                const losses = rs.losses || 0;
+                const winRateEl = document.getElementById('win-rate');
+                winRateEl.textContent = rs.total_trades > 0 ? winRate.toFixed(1) + '%' : '-';
+                winRateEl.className = 'stat-value ' + (winRate >= 50 ? 'positive' : rs.total_trades > 0 ? 'negative' : 'neutral');
+                document.getElementById('win-sub').textContent = wins + '승 / ' + losses + '패';
+
+                // 리스크 통계
+                document.getElementById('risk-positions').textContent = rs.active_positions || 0;
+                const pnlPct = rs.daily_pnl || 0;
+                const pnlEl = document.getElementById('risk-pnl');
+                pnlEl.textContent = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
+                pnlEl.className = 'stat-value ' + (pnlPct > 0 ? 'positive' : pnlPct < 0 ? 'negative' : 'neutral');
+                document.getElementById('risk-trades').textContent = rs.total_trades || 0;
+                document.getElementById('risk-cooldown').textContent = rs.cooldown_remaining || 0;
+
+            } catch (e) { console.error(e); }
+        }
+
+        async function fetchTrades() {
+            try {
+                const res = await fetch('/api/trades');
+                const data = await res.json();
+                const trades = (data.trades || []).slice().reverse();
+                const tbody = document.getElementById('trade-body');
+                document.getElementById('trade-count').textContent = trades.length > 0 ? `(${trades.length}건)` : '';
+
+                if (trades.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8b949e;padding:20px">매매 이력 없음</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = trades.slice(0, 100).map(t => {
+                    const [typeClass, typeLabel] = tradeTypeBadge(t);
+                    const time = (t.timestamp || '').slice(5, 19).replace('T', ' ');
+                    const pnl = t.pnl_amount || 0;
+                    const pnlStr = (t.type || '').toLowerCase() === 'sell'
+                        ? `<span class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${pnl.toLocaleString()}원</span>`
+                        : '<span style="color:#8b949e">-</span>';
+                    const result = t.success
+                        ? `<span class="positive">✓</span>${t.dry_run ? ' <span style="color:#d29922;font-size:11px">모의</span>' : ''}`
+                        : `<span class="negative">✗</span>`;
+                    return `<tr>
+                        <td style="color:#8b949e;font-size:12px">${time}</td>
+                        <td style="font-weight:500">${t.name || t.code}<br><span style="color:#8b949e;font-size:11px;font-weight:400">${t.code}</span></td>
+                        <td><span class="badge ${typeClass}">${typeLabel}</span></td>
+                        <td>${t.quantity}</td>
+                        <td>${pnlStr}</td>
+                        <td style="color:#8b949e;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.reason}</td>
+                        <td>${result}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) { console.error(e); }
+        }
+
+        async function startBot() {
+            await fetch('/api/start', { method: 'POST' });
+            setTimeout(fetchStatus, 600);
+        }
+        async function stopBot() {
+            await fetch('/api/stop', { method: 'POST' });
+            setTimeout(fetchStatus, 600);
+        }
+        async function runOnce() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '실행 중...';
+            await fetch('/api/run-once', { method: 'POST' });
+            setTimeout(() => { btn.disabled = false; btn.textContent = '1회 실행'; fetchTrades(); }, 1500);
+        }
+        async function saveConfig() {
+            const watchlist = document.getElementById('watchlist').value.split(',').map(s => s.trim()).filter(Boolean);
+            const check_interval = parseInt(document.getElementById('interval').value) || 60;
+            const total_budget = parseInt(document.getElementById('total-budget').value) || 100000;
+            const dry_run = document.getElementById('dry-run').checked;
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watchlist, check_interval, total_budget, dry_run }),
+            });
+            fetchStatus();
+        }
+
+        fetchStatus();
+        fetchTrades();
+        setInterval(fetchStatus, 5000);
+        setInterval(fetchTrades, 5000);
+    </script>
+</body>
+</html>

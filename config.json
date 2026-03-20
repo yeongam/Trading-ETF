@@ -1,0 +1,21 @@
+{
+  "toss": {
+    "login_url": "https://www.tossinvest.com",
+    "headless": false,
+    "slow_mo": 100,
+    "timeout": 30000
+  },
+  "trading": {
+    "watchlist": [],
+    "check_interval": 10,
+    "max_buy_amount": 0,
+    "total_budget": 150000,
+    "market": "us",
+    "dry_run": false,
+    "etf_only": true
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8080
+  }
+}
