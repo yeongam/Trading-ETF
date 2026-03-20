@@ -217,11 +217,13 @@ class TossBroker(BaseBroker):
             logger.warning("ETF 상세 검증 실패 [%s]: %s — 1차 판별 유지", code, e)
             return False
 
-    async def verify_holding_on_page(self, code: str) -> bool:
-        """종목 상세 페이지에서 보유 여부를 직접 확인 (차트 탭 사용).
+    async def verify_holding_on_page(self, code: str) -> dict:
+        """종목 상세 페이지에서 보유 여부 + 평균 매수가 + 현재가를 확인 (차트 탭 사용).
 
-        매수 후 개별 종목 체결 검증에 사용합니다.
-        /my 페이지에 의존하지 않고 종목 페이지에서 직접 보유 정보를 확인합니다.
+        Returns:
+            dict: {held: bool, qty: int, avg_price: int, page_price: int, method: str}
+            - avg_price: 토스가 표시하는 평균 매수가 (KRW). 추출 실패 시 0.
+            - page_price: 상세 페이지의 현재가 (KRW). 추출 실패 시 0.
         """
         try:
             page = await self._get_chart_page()
@@ -232,33 +234,68 @@ class TossBroker(BaseBroker):
             await asyncio.sleep(4)  # React 렌더링 + 보유 정보 로딩 대기
 
             result = await page.evaluate("""() => {
+                // ── 현재가 추출 (페이지 상단) ──
+                let pagePrice = 0;
+                const priceEl = document.querySelector(
+                    'div._1sivumi0._1sivumi2 > div:nth-child(2) > span._1sivumi3, ' +
+                    '[class*="_1sivumi2"] span[class*="_1sivumi3"]'
+                );
+                if (priceEl) {
+                    const pt = priceEl.innerText.replace(/[^\\d]/g, '');
+                    if (pt) pagePrice = parseInt(pt);
+                }
+
+                // ── 평균 매수가 추출 ──
+                let avgPrice = 0;
+                const allText = document.body.innerText;
+                // "평균 매수가 12,345원" 또는 "평균매수가 $12.34" 등
+                const avgPatterns = [
+                    /평균\\s*매수가\\s*\\$?([\\d,.]+)/,
+                    /매수\\s*평균가\\s*\\$?([\\d,.]+)/,
+                    /평균매수가\\s*\\$?([\\d,.]+)/,
+                    /매수\\s*평균\\s*\\$?([\\d,.]+)/,
+                ];
+                for (const pat of avgPatterns) {
+                    const am = allText.match(pat);
+                    if (am) {
+                        const raw = am[1].replace(/,/g, '');
+                        // 달러 표시인지 확인 (소수점 포함 + 값이 작으면 달러)
+                        const val = parseFloat(raw);
+                        if (am[0].includes('$') || (val < 1000 && raw.includes('.'))) {
+                            // 달러 → 원화 변환은 Python에서 처리 (여기선 달러 플래그만)
+                            avgPrice = -val;  // 음수 = 달러 표시
+                        } else {
+                            avgPrice = parseInt(raw);
+                        }
+                        break;
+                    }
+                }
+
                 // ── 1순위: 주문 영역(#trade-order-section) 내에서 확인 ──
-                // 가장 신뢰도 높음 — 개인 보유 정보만 표시되는 영역
                 const section = document.querySelector('#trade-order-section');
                 if (section) {
                     const sText = section.innerText;
-                    // "보유 N" 또는 "보유수량 N" 패턴
                     const qtyMatch = sText.match(/보유\\s*(?:수량)?\\s*(\\d+)/);
                     if (qtyMatch && parseInt(qtyMatch[1]) > 0)
-                        return {held: true, m: '주문영역보유', qty: parseInt(qtyMatch[1])};
-                    // "판매 가능 N"
+                        return {held: true, m: '주문영역보유', qty: parseInt(qtyMatch[1]),
+                                avgPrice: avgPrice, pagePrice: pagePrice};
                     const sellMatch = sText.match(/판매\\s*가능\\s*(\\d+)/);
                     if (sellMatch && parseInt(sellMatch[1]) > 0)
-                        return {held: true, m: '판매가능', qty: parseInt(sellMatch[1])};
+                        return {held: true, m: '판매가능', qty: parseInt(sellMatch[1]),
+                                avgPrice: avgPrice, pagePrice: pagePrice};
                 }
 
-                // ── 2순위: 내 보유 현황 섹션 (주문 영역 바깥) ──
-                // "내 보유", "내 투자", "나의 보유" 등 개인 섹션 식별
-                const allText = document.body.innerText;
+                // ── 2순위: 내 보유 현황 섹션 ──
                 const personalPatterns = [
                     /내\\s*보유\\s*현황/,
                     /내\\s*투자/,
                     /나의\\s*보유/,
-                    /평균\\s*매수가|매수\\s*평균가|평균매수가/,  // 개인 매수가 (기관/외국인 아님)
+                    /평균\\s*매수가|매수\\s*평균가|평균매수가/,
                 ];
                 for (const pat of personalPatterns) {
                     if (pat.test(allText))
-                        return {held: true, m: pat.source, qty: -1};
+                        return {held: true, m: pat.source, qty: -1,
+                                avgPrice: avgPrice, pagePrice: pagePrice};
                 }
 
                 // ── 3순위: 판매하기 버튼 활성화 여부 ──
@@ -267,23 +304,40 @@ class TossBroker(BaseBroker):
                     for (const btn of btns) {
                         const t = btn.innerText.trim();
                         if (t.includes('판매') && t.includes('하기') && !btn.disabled)
-                            return {held: true, m: '판매하기활성', qty: -1};
+                            return {held: true, m: '판매하기활성', qty: -1,
+                                    avgPrice: avgPrice, pagePrice: pagePrice};
                     }
                 }
 
-                return {held: false, m: null, qty: 0};
+                return {held: false, m: null, qty: 0, avgPrice: 0, pagePrice: pagePrice};
             }""")
 
             is_held = result.get("held", False)
             method = result.get("m")
+            avg_price_raw = result.get("avgPrice", 0)
+            page_price = result.get("pagePrice", 0)
+
+            # 평균 매수가: 달러 표시(음수)면 환율 변환
+            avg_price = 0
+            if avg_price_raw < 0:
+                # 달러 → 원화
+                avg_price = int(abs(avg_price_raw) * self._fx_rate)
+                logger.info("평균 매수가 (달러→원): $%.2f × %.0f = %s원",
+                            abs(avg_price_raw), self._fx_rate, f"{avg_price:,}")
+            elif avg_price_raw > 0:
+                avg_price = int(avg_price_raw)
+
             if is_held:
-                logger.info("보유 확인 [%s]: %s 방식으로 감지 (수량: %s)", code, method, result.get("qty"))
+                logger.info(
+                    "보유 확인 [%s]: %s (수량: %s, 평균매수가: %s원, 페이지현재가: %s원)",
+                    code, method, result.get("qty"),
+                    f"{avg_price:,}" if avg_price > 0 else "미확인",
+                    f"{page_price:,}" if page_price > 0 else "미확인",
+                )
             else:
-                # 미감지 시 디버그: 주문 영역 텍스트 덤프 (패턴 튜닝용)
                 debug_text = await page.evaluate("""() => {
                     const section = document.querySelector('#trade-order-section');
                     const sText = section ? section.innerText.substring(0, 500) : '(주문영역 없음)';
-                    // 페이지 전체에서 '보유' 키워드 주변 텍스트 추출
                     const body = document.body.innerText;
                     const idx = body.indexOf('보유');
                     const holdContext = idx >= 0
@@ -302,10 +356,15 @@ class TossBroker(BaseBroker):
             chart_url = f"{self._config.login_url}/?market=us&live-chart=biggest_total_amount"
             await page.goto(chart_url, wait_until="domcontentloaded")
 
-            return is_held
+            return {
+                "held": is_held,
+                "avg_price": avg_price,
+                "page_price": page_price,
+                "qty": result.get("qty", 0),
+            }
         except Exception as e:
             logger.warning("보유 확인 실패 [%s]: %s", code, e)
-            return False
+            return {"held": False, "avg_price": 0, "page_price": 0, "qty": 0}
 
     async def get_held_codes_via_chart_tab(self) -> set[str]:
         """차트 탭을 이용해 보유 종목 코드만 추출 (메인 탭 이동 없음).
@@ -491,7 +550,15 @@ class TossBroker(BaseBroker):
 
                 const text = container.innerText;
                 // US 종목: 달러 가격을 우선 사용 (원화 패턴은 오탐 위험)
-                const dollarMatch = text.match(/\\$([\\d,]+\\.?\\d*)/);
+                // 핵심: 변동금액(-$2.35)이 현재가($25.50)보다 먼저 나올 수 있으므로
+                // 모든 달러 값 중 가장 큰 값을 현재가로 사용 (변동금액 < 현재가)
+                const dollarAll = [...text.matchAll(/\\$([\\d,]+\\.?\\d*)/g)];
+                let dollarMatch = null;
+                let maxVal = 0;
+                for (const dm of dollarAll) {
+                    const v = parseFloat(dm[1].replace(/,/g, ''));
+                    if (v > maxVal) { maxVal = v; dollarMatch = dm; }
+                }
                 const changeMatch = text.match(/[+-]?[\\d.]+%/);
                 // 거래량 추출: "123만", "1.2억", "45,678" 등
                 const volMatch = text.match(/([\\d,]+\\.?\\d*)\\s*(만|억)/);

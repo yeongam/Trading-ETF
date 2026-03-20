@@ -157,8 +157,8 @@ class TradingScheduler:
         phantom: list[str] = []
         for code in codes_to_check:
             try:
-                is_held = await self._broker.verify_holding_on_page(code)
-                if not is_held:
+                hold_info = await self._broker.verify_holding_on_page(code)
+                if not hold_info.get("held"):
                     phantom.append(code)
             except Exception as e:
                 # 검증 실패 시 안전하게 유지 (삭제하지 않음)
@@ -228,43 +228,68 @@ class TradingScheduler:
                 await asyncio.sleep(3)  # 체결 반영 대기
 
                 if signal.type == SignalType.BUY:
-                    # 종목 상세 페이지에서 직접 보유 확인 (/my 의존 제거)
-                    is_held = await self._broker.verify_holding_on_page(signal.code)
-                    if not is_held:
+                    # 종목 상세 페이지에서 직접 보유 확인 + 평균 매수가 추출
+                    hold_info = await self._broker.verify_holding_on_page(signal.code)
+                    if not hold_info.get("held"):
                         # 1차 실패 → 3초 후 재시도 (체결 지연 대응)
                         logger.warning(
                             "매수 체결 1차 미확인: %s(%s) — 3초 후 재확인",
                             stock_name, signal.code,
                         )
                         await asyncio.sleep(3)
-                        is_held = await self._broker.verify_holding_on_page(signal.code)
+                        hold_info = await self._broker.verify_holding_on_page(signal.code)
 
-                    if not is_held:
+                    if not hold_info.get("held"):
                         logger.error(
                             "매수 체결 최종 미확인: %s(%s) — 보유 정보 없음 (포지션 등록 안함)",
                             stock_name, signal.code,
                         )
                         result = OrderResult(success=False, message="체결 미확인: 보유 정보 없음")
                     else:
-                        current_price = price_info.current_price if price_info else signal.price
-                        if current_price > 0:
+                        # 진입가 결정 우선순위:
+                        # 1. 토스 페이지의 평균 매수가 (가장 정확)
+                        # 2. 상세 페이지 현재가
+                        # 3. 캐시 현재가 (최후 수단)
+                        avg_price = hold_info.get("avg_price", 0)
+                        page_price = hold_info.get("page_price", 0)
+                        cache_price = price_info.current_price if price_info else signal.price
+
+                        if avg_price > 0:
+                            entry_price = avg_price
+                            price_src = "평균매수가"
+                        elif page_price > 0:
+                            entry_price = page_price
+                            price_src = "페이지현재가"
+                        else:
+                            entry_price = cache_price
+                            price_src = "캐시가격"
+
+                        if entry_price > 0:
                             self._risk.open_position(
-                                signal.code, current_price, signal.quantity,
+                                signal.code, entry_price, signal.quantity,
                                 stop_loss=signal.stop_loss,
                                 take_profit=signal.take_profit,
                                 entry_strategy=signal.entry_strategy,
                             )
                             logger.info(
-                                "매수 체결 확인 → 포지션 등록: %s(%s) %d주 @ %s원",
-                                stock_name, signal.code, signal.quantity, f"{current_price:,}",
+                                "매수 체결 확인 → 포지션 등록: %s(%s) %d주 @ %s원 (%s)",
+                                stock_name, signal.code, signal.quantity,
+                                f"{entry_price:,}", price_src,
                             )
                         else:
                             logger.warning("가격 미확인 — 리스크 추적 건너뜀: %s", signal.code)
 
                 elif signal.type == SignalType.SELL:
-                    # 매도: _place_order()에서 이미 실패 키워드 검증 완료
-                    # 추가 페이지 검증 없이 즉시 포지션 청산 (행 방지 + 지연 제거)
-                    current_price = price_info.current_price if price_info else signal.price
+                    # 매도: 상세 페이지에서 실제 현재가 확인 (캐시 가격 오차 방지)
+                    sell_info = await self._broker.verify_holding_on_page(signal.code)
+                    page_price = sell_info.get("page_price", 0)
+                    cache_price = price_info.current_price if price_info else signal.price
+                    current_price = page_price if page_price > 0 else cache_price
+                    if page_price > 0 and cache_price > 0 and abs(page_price - cache_price) / cache_price > 0.1:
+                        logger.warning(
+                            "매도 가격 차이: 페이지 %s원 vs 캐시 %s원 (페이지 가격 사용)",
+                            f"{page_price:,}", f"{cache_price:,}",
+                        )
                     if current_price > 0:
                         pnl_data = self._risk.close_position(signal.code, current_price)
                         if pnl_data:
